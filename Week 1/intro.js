@@ -227,3 +227,27 @@ toad.accelerate();
 console.log("\nSpeed: " + toad.speed);
 
 toad.print();
+
+class Student
+{
+    constructor(name, id, course)
+    {
+        this.name = name;
+        this.id = id;
+        this.course = course;
+        this.marks = [];
+    }
+
+    print()
+    {
+        console.log("\nStudent Information\n-------------------");
+        console.log("Name: " + this.name);
+        console.log("ID: " + this.id);
+        console.log("Course: " + this.course);
+    }
+}
+
+const students = 
+[
+    new Student("Ellie Willliams", 12345678, "Computer Science"),
+]
