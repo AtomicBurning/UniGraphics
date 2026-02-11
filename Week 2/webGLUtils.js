@@ -48,3 +48,31 @@ function createProgram(gl, vertexSource, fragmentSource)
     
     return program;
 }
+
+function createVao(gl, program, vertices, indices)
+{
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+
+    const vbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+
+    const ebo = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+
+    const stride = 6 * Float32Array.BYTES_PER_ELEMENT;
+    const positionLocation = gl.getAttribLocation(program, "aPosition");
+    gl.enableVertexAttribArray(positionLocation);
+    gl.vertexAttribPointer(positionLocation, 3, gl.FLOAT, false, stride, 0);
+
+    let offset = 3 * Float32Array.BYTES_PER_ELEMENT;
+    const colourLocation = gl.getAttribLocation(program, "aColour");
+    gl.enableVertexAttribArray(colourLocation);
+    gl.vertexAttribPointer(colourLocation, 3, gl.FLOAT, false, stride, offset);
+
+    gl.bindVertexArray(null);
+
+    return vao
+}
