@@ -44,29 +44,122 @@ in vec3 vPosition;
 out vec4 fragColour;
 
 uniform sampler2D uTexture;
+uniform vec3 uCameraPosition;
+
+// Material coefficients
 uniform float uKa;
-
-uniform vec3 uLightPosition;
-uniform vec3 uLightColour;
-
 uniform float uKd;
+uniform float uKs;
+uniform float uShininess;
 
+// Light struct
+struct Light {
+  vec3 position;
+  vec3 colour;
+  float constant;
+  float linear;
+  float quadratic;
+  int type;
+  vec3 direction;
+  float cutoff;
+  float outerCutoff;
+};
+
+// Number of lights
+uniform int uNumLights;
+
+// Array of lights
+uniform Light uLights[16];
+
+// Function to compute the lighting
+vec3 computeLighting(Light light, vec3 N, vec3 V, vec3 objectColour){
+
+  // Light vector
+  vec3 L = normalize(light.position - vPosition);
+
+  // Attenuation
+  float distance = length(light.position - vPosition);
+  float attenuation = 1.0 / (
+    light.constant +
+    light.linear * distance +
+    light.quadratic * distance * distance
+  );
+
+  // Spotlight intensity
+  float intensity = 1.0;
+  if (light.type == 1) {
+    float theta = dot(-L, normalize(light.direction));
+    float epsilon = light.cutoff - light.outerCutoff;
+    intensity = clamp((theta - light.outerCutoff) / epsilon, 0.0, 1.0);
+  }
+
+  // Directional light
+  if (light.type == 2) {
+    L = normalize(-light.direction);
+    attenuation = 1.0;
+  }
+
+  // Ambient light
+  vec3 ambient = uKa * objectColour;
+
+  // Diffuse light
+  float diff = max(dot(N, L), 0.0);
+  vec3 diffuse = uKd * max(dot(N, L), 0.0) * light.colour * objectColour;
+
+  // Specular light
+  vec3 H = normalize(L + V);
+  float spec = pow(max(dot(N, H), 0.0), uShininess);
+  vec3 specular = uKs * spec * light.colour;
+
+  // Output fragment colour
+  return attenuation * (ambient + intensity * (diffuse + specular));
+}
+
+// Main fragment shader function
 void main() {
 
   // Object colour
   vec4 objectColour = texture(uTexture, vTexCoords);
 
-  // Ambient light
-  vec3 ambient = uKa * objectColour.rgb;
-
-  // Diffuse light
+  // Lighting vectors
   vec3 N = normalize(vNormal);
-  vec3 L = normalize(uLightPosition - vPosition);
-  float diff = max(dot(N, L), 0.0);
-  vec3 diffuse = uKd * diff * uLightColour * objectColour.rgb;
+  vec3 V = normalize(uCameraPosition - vPosition);
+
+  // Calculate lighting for each light source
+  vec3 lighting;
+  for (int i = 0; i < uNumLights; i++) {
+    lighting += computeLighting(uLights[i], N, V, objectColour.rgb);
+  }
 
   // Fragment colour
-  fragColour = vec4(diffuse, objectColour.a);
+  fragColour = vec4(lighting, objectColour.a);
+}`;
+
+// Define vertex and fragment shaders for the light source
+const lightVertexShader =
+`#version 300 es
+precision mediump float;
+
+in vec3 aPosition;
+
+uniform mat4 uModel;
+uniform mat4 uView;
+uniform mat4 uProjection;
+
+void main() {
+  gl_Position = uProjection * uView * uModel * vec4(aPosition, 1.0);
+}`;
+
+const lightFragmentShader =
+`#version 300 es
+precision mediump float;
+
+out vec4 fragColour;
+
+uniform vec3 uLightColour;
+
+void main() {
+  fragColour = vec4(uLightColour, 1.0);
 }`;
 
 // Main function
@@ -78,6 +171,7 @@ function main() {
     
     // Create WebGL program 
     const program = createProgram(gl, vertexShader, fragmentShader);
+    const lightProgram = createProgram(gl, lightVertexShader, lightFragmentShader);
 
     // Set the shader program
     gl.useProgram(program);
@@ -147,6 +241,8 @@ function main() {
                 position : [3 * i, 0, -3 * j],
                 ka : 0.2,
                 kd : 0.7,
+                ks : 1.0,
+                shininess : 32,
             });
         }
     }
@@ -168,6 +264,22 @@ function main() {
 
     const light = new Light();
     light.position = [6, 2, 0];
+
+    // Add light sources
+    const lightSources = new LightSources();
+    lightSources.addLight(light);
+
+    // Yellow light
+    const yellowLight = new Light(1);
+    yellowLight.position = [9, 3, -9];
+    yellowLight.colour = [1, 1, 0];
+    lightSources.addLight(yellowLight);
+
+    // Directional light
+    const directionalLight = new Light(2);
+    directionalLight.colour = [1, 0, 1];
+    directionalLight.direction = [2, -1, -1];
+    lightSources.addLight(directionalLight);
 
     // Render function
     function render(time) {
@@ -195,7 +307,9 @@ function main() {
 
         gl.uniformMatrix4fv(gl.getUniformLocation(program, "uView"), false, view.m);
         gl.uniformMatrix4fv(gl.getUniformLocation(program, "uProjection"), false, projection.m);
-        light.toShader(gl, program);
+
+        // Send light source properties to the shader
+        lightSources.toShader(gl, program);
 
         for (let i = 0; i < numCubes; i++) 
         {
@@ -213,6 +327,9 @@ function main() {
             gl.uniform1f(gl.getUniformLocation(program, "uKa"), cubes[i].ka);
             gl.uniform1f(gl.getUniformLocation(program, "uKd"), cubes[i].kd);
 
+            gl.uniform1f(gl.getUniformLocation(program, "uKs"), cubes[i].ks);
+            gl.uniform1f(gl.getUniformLocation(program, "uShininess"), cubes[i].shininess);
+
             // Bind texture
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -222,6 +339,52 @@ function main() {
             gl.bindVertexArray(vao);
             gl.drawElements(gl.TRIANGLES, indices.length, gl.UNSIGNED_SHORT, 0);
         }
+
+        // Draw light sources
+        gl.useProgram(lightProgram);
+
+        for (let i = 0; i < lightSources.lights.length; i++) 
+        {
+            // Don't draw directional light source
+            if (lightSources.lights[i].type === 2) continue;
+
+            // Calculate model matrix for light source
+            const model = new Mat4()
+                .translate(lightSources.lights[i].position)
+                .scale([0.1, 0.1, 0.1]);
+
+            // Send model, view and projection matrices to the shaders
+            gl.uniformMatrix4fv(gl.getUniformLocation(lightProgram, "uModel"), false, model.m);
+            gl.uniformMatrix4fv(gl.getUniformLocation(lightProgram, "uView"), false, view.m);
+            gl.uniformMatrix4fv(gl.getUniformLocation(lightProgram, "uProjection"), false, projection.m);
+
+            // Send light colour to the shader
+            gl.uniform3fv(gl.getUniformLocation(lightProgram, "uLightColour"), lightSources.lights[i].colour);
+
+            // Draw light source cube
+            gl.bindVertexArray(vao);
+            gl.drawElements(gl.TRIANGLES, indices.length, gl.UNSIGNED_SHORT, 0);
+        }
+
+        // Calculate model matrix for the light source
+        const model = new Mat4()
+        .translate(light.position)
+        .scale([0.1, 0.1, 0.1]);
+
+        // Send model, view and projection matrices to the shaders
+        gl.uniformMatrix4fv(gl.getUniformLocation(lightProgram, "uModel"), false, model.m);
+        gl.uniformMatrix4fv(gl.getUniformLocation(lightProgram, "uView"), false, view.m);
+        gl.uniformMatrix4fv(gl.getUniformLocation(lightProgram, "uProjection"), false, projection.m);
+
+        // Send camera position to the shader
+        gl.uniform3fv(gl.getUniformLocation(program, "uCameraPosition"), camera.eye);
+
+        // Send light colour to the shader
+        gl.uniform3fv(gl.getUniformLocation(lightProgram, "uLightColour"), light.colour);
+
+        // Draw light source cube
+        gl.bindVertexArray(vao);
+        gl.drawElements(gl.TRIANGLES, indices.length, gl.UNSIGNED_SHORT, 0);
 
         // Render next frame
         requestAnimationFrame(render);
