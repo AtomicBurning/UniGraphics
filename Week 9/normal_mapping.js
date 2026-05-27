@@ -17,6 +17,11 @@ uniform mat4 uModel;
 uniform mat4 uView;
 uniform mat4 uProjection;
 
+in vec3 aTangent;
+
+out vec3 vTangent;
+out vec3 vBitangent;
+
 void main() {
     gl_Position = uProjection * uView * uModel * vec4(aPosition, 1.0);
 
@@ -29,6 +34,10 @@ void main() {
     // Output world space normal vectors
     vNormal = normalize(mat3(transpose(inverse(uModel))) * aNormal);
     vPosition = vec3(uModel * vec4(aPosition, 1.0));
+
+    // Output world space tangent and bitangent vectors
+    vTangent = normalize(mat3(uModel) * aTangent);
+    vBitangent = normalize(cross(vNormal, vTangent));
 }`;
 
 // Define fragment shader
@@ -41,10 +50,19 @@ in vec2 vTexCoords;
 in vec3 vNormal;
 in vec3 vPosition;
 
+in vec3 vTangent;
+in vec3 vBitangent;
+
 out vec4 fragColour;
 
 uniform sampler2D uTexture;
 uniform vec3 uCameraPosition;
+uniform sampler2D uNormalMap;
+uniform sampler2D uSpecularMap;
+
+uniform bool uHasDiffuseMap;
+uniform bool uHasNormalMap;
+uniform bool uHasSpecularMap;
 
 // Material coefficients
 uniform float uKa;
@@ -111,6 +129,11 @@ vec3 computeLighting(Light light, vec3 N, vec3 V, vec3 objectColour){
   float spec = pow(max(dot(N, H), 0.0), uShininess);
   vec3 specular = uKs * spec * light.colour;
 
+  // Apply specular map only if defined
+  if (uHasSpecularMap) {
+    specular *= texture(uSpecularMap, vTexCoords).rgb;
+  }
+
   // Output fragment colour
   return attenuation * (ambient + intensity * (diffuse + specular));
 }
@@ -119,11 +142,24 @@ vec3 computeLighting(Light light, vec3 N, vec3 V, vec3 objectColour){
 void main() {
 
   // Object colour
-  vec4 objectColour = texture(uTexture, vTexCoords);
+  vec4 objectColour = vec4(vColour, 1.0);
+  if (uHasDiffuseMap) {
+    objectColour = texture(uTexture, vTexCoords);
+  }
 
   // Lighting vectors
   vec3 N = normalize(vNormal);
   vec3 V = normalize(uCameraPosition - vPosition);
+
+  // Apply normal map
+  if (uHasNormalMap) {
+    vec3 T = normalize(vTangent);
+    vec3 B = cross(N, T);
+    mat3 TBN = mat3(T, B, N);
+
+    vec3 normalSample = texture(uNormalMap, vTexCoords).rgb * 2.0 - 1.0;
+    N = normalize(TBN * normalSample);
+  }
 
   // Calculate lighting for each light source
   vec3 lighting;
@@ -241,7 +277,7 @@ function main() {
                 position : [3 * i, 0, -3 * j],
                 ka : 0.2,
                 kd : 0.7,
-                ks : 1.0,
+                ks : 0.2,
                 shininess : 32,
             });
         }
@@ -254,6 +290,30 @@ function main() {
 
     // Load texture
     const texture = loadTexture(gl, "assets/crate.png");
+    const normalMap = loadTexture(gl, "assets/crate_normal.png");
+
+    // Define floor vertices
+    const floorVertices = new Float32Array([
+      // x y   z     R  G  B     u  v     nx  ny  nz
+      -1,  0,  1,    0, 0, 0,    0, 0,    0,  1,  0,
+      1,  0,  1,    0, 0, 0,    8, 0,    0,  1,  0,
+      1,  0, -1,    0, 0, 0,    8, 8,    0,  1,  0,
+      -1,  0, -1,    0, 0, 0,    0, 8,    0,  1,  0,
+    ]);
+
+    // Define floor indices
+    const floorIndices = new Uint16Array([
+      0,  1,  2,  
+      0,  2,  3,
+    ]);
+
+    // Define floor VAO
+    const floorVao = createVao(gl, program, floorVertices, floorIndices);
+
+    // Load floor textures
+    const floorTexture = loadTexture(gl, "assets/stones.png");
+    const floorNormalMap = loadTexture(gl, "assets/stones_normal.png");
+    const floorSpecularMap = loadTexture(gl, "assets/stones_specular.png");
 
     const camera = new Camera();
     camera.eye = [6, 2, 5];
@@ -315,13 +375,13 @@ function main() {
         {
             // Calculate the model matrix
             const angle = 0;
-            const model = new Mat4()
+            const cubeModel = new Mat4()
                 .translate(cubes[i].position)
                 .rotate([0, 1, 0], angle)
                 .scale([0.5, 0.5, 0.5]);
 
             // Send model matrix to the shader
-            gl.uniformMatrix4fv(gl.getUniformLocation(program, "uModel"), false, model.m);
+            gl.uniformMatrix4fv(gl.getUniformLocation(program, "uModel"), false, cubeModel.m);
             
             //Send Object Light
             gl.uniform1f(gl.getUniformLocation(program, "uKa"), cubes[i].ka);
@@ -334,11 +394,58 @@ function main() {
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, texture);
             gl.uniform1i(gl.getUniformLocation(program, "uTexture"), 0);
+
+            // Bind normal map
+            gl.activeTexture(gl.TEXTURE1);
+            gl.bindTexture(gl.TEXTURE_2D, normalMap);
+            gl.uniform1i(gl.getUniformLocation(program, "uNormalMap"), 1);
+
+            // Send texture flags to the shader
+            gl.uniform1i(gl.getUniformLocation(program, "uHasDiffuseMap"), true);
+            gl.uniform1i(gl.getUniformLocation(program, "uHasNormalMap"), true);
+            gl.uniform1i(gl.getUniformLocation(program, "uHasSpecularMap"), false);
             
             // Draw the triangles
             gl.bindVertexArray(vao);
             gl.drawElements(gl.TRIANGLES, indices.length, gl.UNSIGNED_SHORT, 0);
         }
+
+        // Draw floor
+        // Bind texture
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, floorTexture);
+        gl.uniform1i(gl.getUniformLocation(program, "uTexture"), 0);
+
+        // Bind normal map
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, floorNormalMap);
+        gl.uniform1i(gl.getUniformLocation(program, "uNormalMap"), 1);
+
+        // Bind specular map
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, floorSpecularMap);
+        gl.uniform1i(gl.getUniformLocation(program, "uSpecularMap"), 2);
+
+        // Send texture flags to the shader
+        gl.uniform1i(gl.getUniformLocation(program, "uHasDiffuseMap"), true);
+        gl.uniform1i(gl.getUniformLocation(program, "uHasNormalMap"), true);
+        gl.uniform1i(gl.getUniformLocation(program, "uHasSpecularMap"), true);
+
+        // Send object light properties to the shader
+        gl.uniform1f(gl.getUniformLocation(program, "uKa"), 0.2);
+        gl.uniform1f(gl.getUniformLocation(program, "uKd"), 0.7);
+        gl.uniform1f(gl.getUniformLocation(program, "uKs"), 1.0);
+        gl.uniform1f(gl.getUniformLocation(program, "uShininess"), 32);
+
+        // Calculate the model matrix
+        const floorModel = new Mat4()
+          .translate([6, -0.5, -6])
+          .scale([10, 1, 10]);
+        gl.uniformMatrix4fv(gl.getUniformLocation(program, "uModel"), false, floorModel.m);
+
+        // Draw the triangles
+        gl.bindVertexArray(floorVao);
+        gl.drawElements(gl.TRIANGLES, floorIndices.length, gl.UNSIGNED_SHORT, 0);
 
         // Send camera position to the shader
         gl.uniform3fv(gl.getUniformLocation(program, "uCameraPosition"), camera.eye);
